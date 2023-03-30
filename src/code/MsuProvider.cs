@@ -5,14 +5,16 @@
 using Microsoft.Deployment.Compression.Cab;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Threading;
 
 namespace AnyPackage.Provider.Msu
 {
     [PackageProvider("Msu")]
-    public sealed class MsuProvider : PackageProvider, IFindPackage, IGetPackage
+    public sealed class MsuProvider : PackageProvider, IFindPackage, IGetPackage, IInstallPackage
     {
         private readonly static Guid s_id = new Guid("314633fe-c7e9-4eeb-824b-382a8a4e92b8");
 
@@ -67,6 +69,41 @@ namespace AnyPackage.Provider.Msu
                                          (string)hotFix["Description"]);
                 }
             }
+        }
+
+        public void InstallPackage(PackageRequest request)
+        {
+            var args = $"{request.Name} /quiet /norestart";
+            var psi = new ProcessStartInfo("wusa.exe", args);
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+
+            using var process = new Process();
+            process.StartInfo = psi;
+            process.Start();
+
+            while (!process.HasExited)
+            {
+                if (request.Stopping)
+                {
+                    process.Kill();
+                    throw new OperationCanceledException();
+                }
+
+                Thread.Sleep(1000);
+            }
+
+            if (process.ExitCode == 3010)
+            {
+                request.WriteWarning("Reboot required to complete install.");
+            }
+            else if (process.ExitCode != 0)
+            {
+                throw new PackageProviderException($"Package '{request.Name}' failed to install.");
+            }
+
+            FindPackage(request);
         }
     }
 }
